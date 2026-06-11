@@ -11,43 +11,23 @@ from telegram.constants import ParseMode
 # ========== কনফিগারেশন ==========
 BOT_TOKEN = "8931648464:AAFJsROE9zpYcdXsuXhWn-PY5ld6rg_gtGg"
 CHANNEL_ID = "-1003959054969"
+TIMEFRAME = "1M"          # শুধু 1 মিনিট
 
-# ========== সব অ্যাসেটের তালিকা (Quotex-এর সব) ==========
+# ========== শুধু ফরেক্স অ্যাসেট (Quotex Forex) ==========
 ASSETS = {
-    # Forex
-    "EUR/USD": {"volatility": 0.0015, "base_price": 1.0850, "type": "Forex"},
-    "GBP/USD": {"volatility": 0.0015, "base_price": 1.2680, "type": "Forex"},
-    "USD/JPY": {"volatility": 0.0015, "base_price": 148.20, "type": "Forex"},
-    "AUD/USD": {"volatility": 0.0015, "base_price": 0.6640, "type": "Forex"},
-    "USD/CAD": {"volatility": 0.0015, "base_price": 1.3580, "type": "Forex"},
-    "EUR/GBP": {"volatility": 0.0015, "base_price": 0.8550, "type": "Forex"},
-    # Crypto
-    "BTC/USD": {"volatility": 0.025, "base_price": 62500, "type": "Crypto"},
-    "ETH/USD": {"volatility": 0.018, "base_price": 3120, "type": "Crypto"},
-    "LTC/USD": {"volatility": 0.015, "base_price": 82.5, "type": "Crypto"},
-    # OTC
-    "EUR/USD OTC": {"volatility": 0.0012, "base_price": 1.0852, "type": "OTC"},
-    "GBP/USD OTC": {"volatility": 0.0012, "base_price": 1.2678, "type": "OTC"},
-    "USD/JPY OTC": {"volatility": 0.0012, "base_price": 148.25, "type": "OTC"},
-    # Commodity
-    "GOLD": {"volatility": 0.004, "base_price": 2350, "type": "Commodity"},
-    "SILVER": {"volatility": 0.003, "base_price": 28.4, "type": "Commodity"},
-    "OIL": {"volatility": 0.012, "base_price": 82.3, "type": "Commodity"},
+    "EUR/USD": {"volatility": 0.0015, "base_price": 1.0850},
+    "GBP/USD": {"volatility": 0.0015, "base_price": 1.2680},
+    "USD/JPY": {"volatility": 0.0015, "base_price": 148.20},
+    "AUD/USD": {"volatility": 0.0015, "base_price": 0.6640},
+    "USD/CAD": {"volatility": 0.0015, "base_price": 1.3580},
+    "EUR/GBP": {"volatility": 0.0015, "base_price": 0.8550},
 }
 
-# প্রতিটি অ্যাসেটের জন্য আলাদা প্রাইস হিস্টোরি
+# প্রতিটি অ্যাসেটের জন্য প্রাইস হিস্টোরি
 price_history = {asset: [data["base_price"]] * 30 for asset, data in ASSETS.items()}
 current_prices = {asset: data["base_price"] for asset, data in ASSETS.items()}
 
-# টাইমফ্রেম (সেকেন্ডে)
-TIMEFRAMES = {
-    "1M": 60,
-    "2M": 120,
-    "5M": 300,
-    "10M": 600
-}
-
-# ========== ফ্লাস্ক হেলথ চেক ==========
+# ========== ফ্লাস্ক হেলথ চেক (Render-এর জন্য) ==========
 app = Flask(__name__)
 
 @app.route('/')
@@ -68,14 +48,9 @@ def update_price(asset):
     change = (random.random() - 0.5) * vol
     new_price = curr + change
     # বাউন্ড চেক
-    if asset in ["BTC/USD"] and new_price < 30000:
-        new_price = 30000
-    elif asset in ["GOLD"] and new_price < 2000:
-        new_price = 2000
-    elif "USD" in asset and new_price < 0.5:
+    if new_price < 0.5:
         new_price = 0.5
     current_prices[asset] = new_price
-    # হিস্টোরি আপডেট
     price_history[asset].append(new_price)
     if len(price_history[asset]) > 30:
         price_history[asset].pop(0)
@@ -136,8 +111,8 @@ def get_stochastic_signal(asset):
         return "BEAR"
     return "NEUTRAL"
 
-def generate_signal(asset, timeframe_sec):
-    """একটি অ্যাসেট ও টাইমফ্রেমের জন্য সিগন্যাল জেনারেট করে (CALL/PUT)"""
+def generate_signal(asset):
+    """শুধুমাত্র CALL বা PUT রিটার্ন করবে (WAIT বাদ)"""
     rsi = calculate_rsi(asset)
     macd = get_macd_signal(asset)
     bb = get_bollinger_signal(asset)
@@ -145,87 +120,74 @@ def generate_signal(asset, timeframe_sec):
     
     bull_points, bear_points = 0, 0
     
-    # RSI
     if rsi < 35: bull_points += 35
     elif rsi > 65: bear_points += 35
     elif rsi < 45: bull_points += 15
     elif rsi > 55: bear_points += 15
     
-    # MACD
     if macd == "BULL": bull_points += 30
     elif macd == "BEAR": bear_points += 30
     
-    # Bollinger
     if bb == "LOWER": bull_points += 25
     elif bb == "UPPER": bear_points += 25
     
-    # Stochastic
     if stoch == "BULL": bull_points += 20
     elif stoch == "BEAR": bear_points += 20
     
-    # Momentum (সরল)
+    # Momentum
     hist = price_history[asset]
     if len(hist) >= 2:
         mom = hist[-1] - hist[-2]
         if mom > 0: bull_points += 15
         elif mom < 0: bear_points += 15
     
-    # র‍্যান্ডম নয়েজ
+    # র‍্যান্ডম নয়েজ (বাস্তবতার কাছাকাছি)
     bull_points += random.uniform(-5, 5)
     bear_points += random.uniform(-5, 5)
     
     total = bull_points + bear_points
     if total == 0:
-        return "WAIT"
+        return random.choice(["CALL", "PUT"])  # fallback
     
     bull_ratio = bull_points / total
-    if bull_ratio >= 0.65:
+    if bull_ratio >= 0.55:
         return "CALL"
-    elif bull_ratio <= 0.35:
-        return "PUT"
     else:
-        return "WAIT"
+        return "PUT"
 
-def format_signal_message(asset, direction, current_price, timeframe_label):
+def format_signal_message(asset, direction, current_price):
     arrow = "🟢" if direction == "CALL" else "🔴"
     timestamp = datetime.now().strftime("%H:%M")
-    msg = f"📊 {asset}\n🕓 {timestamp}\n⏳ {timeframe_label}\n{arrow} {direction}\n🎯 {round(current_price, 2)}"
+    msg = f"📊 {asset}\n🕓 {timestamp}\n⏳ {TIMEFRAME}\n{arrow} {direction}\n🎯 {round(current_price, 2)}"
     return msg
 
-# ========== রোটেশন সিস্টেম ==========
+# ========== রোটেশন সিস্টেম (শুধু ফরেক্স অ্যাসেট) ==========
 asset_list = list(ASSETS.keys())
 asset_index = 0
 
-async def send_signals_for_asset():
+async def send_signal_for_current_asset():
     global asset_index
     asset = asset_list[asset_index]
     current_price = update_price(asset)
+    direction = generate_signal(asset)
+    msg = format_signal_message(asset, direction, current_price)
     
-    # প্রতিটি টাইমফ্রেমের জন্য আলাদা সিগন্যাল জেনারেট ও পাঠান
-    for tf_label, tf_sec in TIMEFRAMES.items():
-        direction = generate_signal(asset, tf_sec)
-        if direction != "WAIT":  # WAIT সিগন্যাল বাদ দিন
-            msg = format_signal_message(asset, direction, current_price, tf_label)
-            bot = Bot(token=BOT_TOKEN)
-            await bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
-            logging.info(f"Sent {direction} for {asset} ({tf_label}) at {current_price}")
-        else:
-            logging.info(f"WAIT for {asset} ({tf_label}) – nothing sent")
+    bot = Bot(token=BOT_TOKEN)
+    await bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
+    logging.info(f"Sent {direction} for {asset} ({TIMEFRAME}) at {current_price}")
     
     # পরবর্তী অ্যাসেটে যান
     asset_index = (asset_index + 1) % len(asset_list)
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    logging.info("Toxic Pro Bot started – rotating all assets and timeframes")
+    logging.info("Toxic Pro Bot started – Forex only, 1M timeframe")
     while True:
-        await send_signals_for_asset()
-        # প্রতিটি অ্যাসেটের জন্য ২ মিনিট (120 সেকেন্ড) অপেক্ষা করবে
-        # এক চক্রে ১৫ অ্যাসেট × ৪ টাইমফ্রেম = ৬০ সিগন্যাল (WAIT বাদে)
-        await asyncio.sleep(120)
+        await send_signal_for_current_asset()
+        await asyncio.sleep(120)   # প্রতি 2 মিনিটে একটি অ্যাসেটের সিগন্যাল
 
 if __name__ == "__main__":
-    # HTTP সার্ভার চালু করুন (Render health check এর জন্য)
+    # HTTP সার্ভার (Render health check)
     server_thread = Thread(target=run_http_server, daemon=True)
     server_thread.start()
     asyncio.run(main())
