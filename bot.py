@@ -11,9 +11,10 @@ from telegram.constants import ParseMode
 # ========== কনফিগারেশন ==========
 BOT_TOKEN = "8931648464:AAFJsROE9zpYcdXsuXhWn-PY5ld6rg_gtGg"
 CHANNEL_ID = "-1003959054969"
-TIMEFRAME = "1M"          # শুধু 1 মিনিট
+TIMEFRAME = "1M"
+EXPIRY_SECONDS = 60          # 1 মিনিট
 
-# ========== শুধু ফরেক্স অ্যাসেট (Quotex Forex) ==========
+# ========== শুধু ফরেক্স অ্যাসেট ==========
 ASSETS = {
     "EUR/USD": {"volatility": 0.0015, "base_price": 1.0850},
     "GBP/USD": {"volatility": 0.0015, "base_price": 1.2680},
@@ -23,11 +24,13 @@ ASSETS = {
     "EUR/GBP": {"volatility": 0.0015, "base_price": 0.8550},
 }
 
-# প্রতিটি অ্যাসেটের জন্য প্রাইস হিস্টোরি
 price_history = {asset: [data["base_price"]] * 30 for asset, data in ASSETS.items()}
 current_prices = {asset: data["base_price"] for asset, data in ASSETS.items()}
 
-# ========== ফ্লাস্ক হেলথ চেক (Render-এর জন্য) ==========
+# পেন্ডিং সিগন্যালের জন্য স্টোর (signal_id -> asset, direction, message_id)
+pending_signals = {}
+
+# ========== ফ্লাস্ক হেলথ চেক ==========
 app = Flask(__name__)
 
 @app.route('/')
@@ -42,12 +45,10 @@ def run_http_server():
 
 # ========== মার্কেট সিমুলেশন ==========
 def update_price(asset):
-    """অ্যাসেটের বর্তমান মূল্য আপডেট করে"""
     vol = ASSETS[asset]["volatility"]
     curr = current_prices[asset]
     change = (random.random() - 0.5) * vol
     new_price = curr + change
-    # বাউন্ড চেক
     if new_price < 0.5:
         new_price = 0.5
     current_prices[asset] = new_price
@@ -112,14 +113,12 @@ def get_stochastic_signal(asset):
     return "NEUTRAL"
 
 def generate_signal(asset):
-    """শুধুমাত্র CALL বা PUT রিটার্ন করবে (WAIT বাদ)"""
     rsi = calculate_rsi(asset)
     macd = get_macd_signal(asset)
     bb = get_bollinger_signal(asset)
     stoch = get_stochastic_signal(asset)
     
     bull_points, bear_points = 0, 0
-    
     if rsi < 35: bull_points += 35
     elif rsi > 65: bear_points += 35
     elif rsi < 45: bull_points += 15
@@ -134,34 +133,47 @@ def generate_signal(asset):
     if stoch == "BULL": bull_points += 20
     elif stoch == "BEAR": bear_points += 20
     
-    # Momentum
     hist = price_history[asset]
     if len(hist) >= 2:
         mom = hist[-1] - hist[-2]
         if mom > 0: bull_points += 15
         elif mom < 0: bear_points += 15
     
-    # র‍্যান্ডম নয়েজ (বাস্তবতার কাছাকাছি)
     bull_points += random.uniform(-5, 5)
     bear_points += random.uniform(-5, 5)
     
     total = bull_points + bear_points
     if total == 0:
-        return random.choice(["CALL", "PUT"])  # fallback
-    
+        return random.choice(["CALL", "PUT"])
     bull_ratio = bull_points / total
-    if bull_ratio >= 0.55:
-        return "CALL"
-    else:
-        return "PUT"
+    return "CALL" if bull_ratio >= 0.55 else "PUT"
 
 def format_signal_message(asset, direction, current_price):
     arrow = "🟢" if direction == "CALL" else "🔴"
     timestamp = datetime.now().strftime("%H:%M")
-    msg = f"📊 {asset}\n🕓 {timestamp}\n⏳ {TIMEFRAME}\n{arrow} {direction}\n🎯 {round(current_price, 2)}"
+    return f"📊 {asset}\n🕓 {timestamp}\n⏳ {TIMEFRAME}\n{arrow} {direction}\n🎯 {round(current_price, 2)}"
+
+def format_result_message(asset, direction, result, timestamp):
+    status = "✔️✔️✔️ WIN" if result == "win" else "❌❌❌ LOSS"
+    msg = f"Toxic Pro\n**!! Toxic Pro Signal !!**\n\n{asset}\n{timestamp}\n\n{status}"
     return msg
 
-# ========== রোটেশন সিস্টেম (শুধু ফরেক্স অ্যাসেট) ==========
+async def send_result(signal_id, asset, direction):
+    await asyncio.sleep(EXPIRY_SECONDS)
+    # সিমুলেটেড রেজাল্ট – 65% WIN chance (আপনি চাইলে বেশি/কম করতে পারেন)
+    win_chance = 0.65
+    is_win = random.random() < win_chance
+    result = "win" if is_win else "loss"
+    result_time = datetime.now().strftime("%H:%M")
+    result_msg = format_result_message(asset, direction, result, result_time)
+    bot = Bot(token=BOT_TOKEN)
+    await bot.send_message(chat_id=CHANNEL_ID, text=result_msg, parse_mode=ParseMode.MARKDOWN)
+    logging.info(f"Result for {asset} ({direction}): {result}")
+    # পেন্ডিং সিগন্যাল থেকে সরান
+    if signal_id in pending_signals:
+        del pending_signals[signal_id]
+
+# ========== মূল লুপ ==========
 asset_list = list(ASSETS.keys())
 asset_index = 0
 
@@ -170,24 +182,28 @@ async def send_signal_for_current_asset():
     asset = asset_list[asset_index]
     current_price = update_price(asset)
     direction = generate_signal(asset)
-    msg = format_signal_message(asset, direction, current_price)
+    signal_msg = format_signal_message(asset, direction, current_price)
     
     bot = Bot(token=BOT_TOKEN)
-    await bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
-    logging.info(f"Sent {direction} for {asset} ({TIMEFRAME}) at {current_price}")
+    await bot.send_message(chat_id=CHANNEL_ID, text=signal_msg, parse_mode=ParseMode.MARKDOWN)
+    logging.info(f"Signal sent: {direction} for {asset} at {current_price}")
     
-    # পরবর্তী অ্যাসেটে যান
+    # রেজাল্ট শিডিউল করুন
+    signal_id = f"{asset}_{datetime.now().timestamp()}"
+    pending_signals[signal_id] = {"asset": asset, "direction": direction}
+    asyncio.create_task(send_result(signal_id, asset, direction))
+    
+    # পরবর্তী অ্যাসেট
     asset_index = (asset_index + 1) % len(asset_list)
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    logging.info("Toxic Pro Bot started – Forex only, 1M timeframe")
+    logging.info("Toxic Pro Bot started (Forex, 1M, with auto results)")
     while True:
         await send_signal_for_current_asset()
         await asyncio.sleep(120)   # প্রতি 2 মিনিটে একটি অ্যাসেটের সিগন্যাল
 
 if __name__ == "__main__":
-    # HTTP সার্ভার (Render health check)
     server_thread = Thread(target=run_http_server, daemon=True)
     server_thread.start()
     asyncio.run(main())
